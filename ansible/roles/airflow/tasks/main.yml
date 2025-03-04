@@ -1,0 +1,108 @@
+---
+  # Ensures the Airflow home directory exists with correct permissions
+- name: Create a directory for Airflow
+  file:
+    path: "{{ airflow_home }}"
+    state: directory
+    mode: "0755"
+  become: yes
+
+  # Creates a virtual environment to isolate Airflow dependencies
+- name: Create a Python virtual environment
+  command: python3 -m venv "{{ airflow_home }}/venv"
+  args:
+    creates: "{{ airflow_home }}/venv"
+  become: yes
+
+  # Installs Airflow inside the virtual environment with a specific version
+- name: Install Apache Airflow
+  pip:
+    virtualenv_python: python3
+    virtualenv: "{{ airflow_home }}/venv"
+    name: "apache-airflow=={{ airflow_version }}"
+    extra_args: "--constraint {{ constraint_url }}"
+  become: yes
+
+  # Ensures that the DAGs directory exists for storing workflow definitions
+- name: Ensure Airflow DAGs directory exists
+  file:
+    path: "{{ airflow_home }}/dags"
+    state: directory
+    mode: '0755'
+
+  # Deploys a Overal Airflow monitoring DAG from a Jinja2 template to the Airflow DAGs directory
+- name: Copy Overal Airflow monitoring DAG file to Airflow
+  template:
+    src: "monitoring.py.j2"
+    dest: "{{ airflow_home }}/dags/monitoring.py"
+    mode: "0644"
+  become: yes
+
+  # Deploys a Airflow process monitoring DAG from a Jinja2 template to the Airflow DAGs directory
+- name: Copy Airflow process monitoring DAG file to Airflow
+  template:
+    src: "single_monitoring.py.j2"
+    dest: "{{ airflow_home }}/dags/single_monitoring.py"
+    mode: "0644"
+  become: yes
+
+  # Runs the Airflow Webserver as a background process
+- name: Start Airflow Webserver in background
+  shell: |
+    nohup {{ airflow_home }}/venv/bin/python3 -m airflow standalone > /opt/airflow/webserver.log 2>&1 &
+  args:
+    executable: /bin/bash
+  environment:
+    AIRFLOW__CORE__DAGS_FOLDER: "{{ airflow_home }}/dags"
+    AIRFLOW_HOME: "{{ airflow_home }}"
+    PATH: "{{ airflow_home }}/venv/bin:{{ ansible_env.PATH }}"
+  become: yes
+
+  # Applies database migrations to ensure the schema is up to date
+- name: Migrate Airflow database
+  ansible.builtin.shell: |
+    {{ airflow_home }}/venv/bin/airflow db migrate
+  args:
+    executable: /bin/bash
+  environment:
+    AIRFLOW__CORE__DAGS_FOLDER: "{{ airflow_home }}/dags"
+    AIRFLOW_HOME: "{{ airflow_home }}"
+    PATH: "{{ airflow_home }}/venv/bin:{{ ansible_env.PATH }}"
+  become: yes
+
+  # Sets Airflow environment variables for email monitoring configurations
+- name: Define Airflow variables
+  ansible.builtin.shell: |
+    {{ airflow_home }}/venv/bin/airflow variables set memory_monitor_smtp_server "{{ memory_monitor_smtp_server }}"
+    {{ airflow_home }}/venv/bin/airflow variables set memory_monitor_smtp_port "{{ memory_monitor_smtp_port }}"
+    {{ airflow_home }}/venv/bin/airflow variables set memory_monitor_smtp_user "{{ memory_monitor_smtp_user }}"
+    {{ airflow_home }}/venv/bin/airflow variables set memory_monitor_smtp_password "{{ memory_monitor_smtp_password }}"
+    {{ airflow_home }}/venv/bin/airflow variables set memory_monitor_email_from "{{ memory_monitor_email_from }}"
+    {{ airflow_home }}/venv/bin/airflow variables set memory_monitor_threshold_mb "{{ memory_monitor_threshold_mb }}"
+    {{ airflow_home }}/venv/bin/airflow variables set memory_monitor_interval "{{ memory_monitor_interval }}"
+    {{ airflow_home }}/venv/bin/airflow variables set memory_monitor_email "{{ memory_monitor_email }}"
+    {{ airflow_home }}/venv/bin/airflow variables set single_process_memory_threshold_mb "{{ single_process_memory_threshold_mb }}"
+    {{ airflow_home }}/venv/bin/airflow variables set single_process_memory_interval "{{ single_process_memory_interval }}"
+  args:
+    executable: /bin/bash
+  environment:
+    AIRFLOW__CORE__DAGS_FOLDER: "{{ airflow_home }}/dags"
+    AIRFLOW_HOME: "{{ airflow_home }}"
+    PATH: "{{ airflow_home }}/venv/bin:{{ ansible_env.PATH }}"
+  become: yes
+
+  # Ensures the memory monitoring DAG is loaded, triggered, and set to active
+- name: Run memory monitoring DAG
+  ansible.builtin.shell: |
+    {{ airflow_home }}/venv/bin/airflow dags reserialize
+    {{ airflow_home }}/venv/bin/airflow dags trigger memory_monitoring
+    {{ airflow_home }}/venv/bin/airflow dags trigger single_process_memory_monitoring
+    {{ airflow_home }}/venv/bin/airflow dags unpause memory_monitoring
+    {{ airflow_home }}/venv/bin/airflow dags unpause single_process_memory_monitoring
+  args:
+    executable: /bin/bash
+  environment:
+    AIRFLOW__CORE__DAGS_FOLDER: "{{ airflow_home }}/dags"
+    AIRFLOW_HOME: "{{ airflow_home }}"
+    PATH: "{{ airflow_home }}/venv/bin:{{ ansible_env.PATH }}"
+  become: yes

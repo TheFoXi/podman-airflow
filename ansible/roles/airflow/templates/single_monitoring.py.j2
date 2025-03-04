@@ -1,0 +1,202 @@
+"""
+Airflow DAG for monitoring memory utilization of a single Airflow process
+with integrated email sending via SMTP.
+"""
+import os
+import psutil
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.operators.python_operator import PythonOperator
+from airflow.models import Variable
+
+# Get parameters from Airflow variables using default values
+MEMORY_THRESHOLD_MB = int(Variable.get("single_process_memory_threshold_mb", default_var=500))
+MONITORING_INTERVAL = Variable.get("single_process_memory_interval", default_var="30")
+
+# Settings for SMTP email
+EMAIL_RECIPIENT = Variable.get("memory_monitor_email", default_var="your-email@example.com")
+SMTP_SERVER = Variable.get("memory_monitor_smtp_server", default_var="smtp.gmail.com")
+SMTP_PORT = int(Variable.get("memory_monitor_smtp_port", default_var=587))
+SMTP_USER = Variable.get("memory_monitor_smtp_user", default_var="your-smtp-user@example.com")
+SMTP_PASSWORD = Variable.get("memory_monitor_smtp_password", default_var="your-smtp-password")
+EMAIL_FROM = Variable.get("memory_monitor_email_from", default_var="airflow-monitor@example.com")
+
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'start_date': datetime(2025, 3, 3),
+    'email_on_failure': True,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
+def send_email_alert(subject, html_content, recipient=EMAIL_RECIPIENT):
+    """
+    Sends an email notification via SMTP.
+    """
+    try:
+        # Create a message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_FROM
+        msg['To'] = recipient
+        
+        # Add HTML content
+        html_part = MIMEText(html_content, 'html')
+        msg.attach(html_part)
+        
+        # Connect to the SMTP server and send the message
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, recipient, msg.as_string())
+            
+        print(f"Email notification successfully sent to {recipient}")
+        return True
+    except Exception as e:
+        print(f"Error when sending email: {str(e)}")
+        return False
+
+def check_single_airflow_process_memory_usage(**context):
+    """
+    Checks the memory usage of the current Airflow process.
+    """
+    # Get the current Airflow process
+    current_process = psutil.Process(os.getpid())
+    
+    # Get memory information
+    memory_info = current_process.memory_info()
+    
+    # Convert to MB for easy reading
+    memory_usage_mb = memory_info.rss / (1024 * 1024)
+    
+    # Create detailed information about the process
+    process_details = f"""
+    PID: {current_process.pid}
+    Command: {' '.join(current_process.cmdline())}
+    Memory Usage: {memory_usage_mb:.2f} MB
+    CPU Usage: {current_process.cpu_percent()}%
+    """
+    
+    # Save the metrics in XCom for display in the UI
+    task_instance = context['task_instance']
+    task_instance.xcom_push(key='memory_usage_mb', value=round(memory_usage_mb, 2))
+    task_instance.xcom_push(key='process_pid', value=current_process.pid)
+    task_instance.xcom_push(key='threshold_mb', value=MEMORY_THRESHOLD_MB)
+    task_instance.xcom_push(key='timestamp', value=str(datetime.now()))
+    
+    print(f"Current memory utilization by the process: {memory_usage_mb:.2f} MB")
+    
+    # Check if the threshold has been exceeded
+    if memory_usage_mb > MEMORY_THRESHOLD_MB:
+        current_time = datetime.now()
+        
+        # Form HTML message
+        html_content = f"""
+        <html>
+        <body>
+        <h2>WARNING: High memory utilization by the Airflow process!</h2>
+        
+        <table border="1" cellpadding="10" style="border-collapse: collapse; width: 100%;">
+            <tr>
+                <th style="background-color: #f2f2f2;">Parameter</th>
+                <th style="background-color: #f2f2f2;">Value</th>
+            </tr>
+            <tr>
+                <td>Current memory usage</td>
+                <td><strong style="color: red;">{memory_usage_mb:.2f} MB</strong></td>
+            </tr>
+            <tr>
+                <td>Memory Threshold</td>
+                <td>{MEMORY_THRESHOLD_MB} MB</td>
+            </tr>
+            <tr>
+                <td>Utilization %</td>
+                <td>{(memory_usage_mb / MEMORY_THRESHOLD_MB) * 100:.1f}%</td>
+            </tr>
+            <tr>
+                <td>Timestamp</td>
+                <td>{current_time}</td>
+            </tr>
+        </table>
+        
+        <h3>Process details:</h3>
+        <pre style="background-color: #f4f4f4; padding: 10px; border-radius: 5px;">
+{process_details}
+        </pre>
+        
+        <p><em>Recommendation: Check the load and performance of the Airflow process</em></p>
+        </body>
+        </html>
+        """
+        
+        subject = f"Airflow Single Process Memory Alert: {memory_usage_mb:.2f} MB"
+        
+        # Send email through our function
+        send_email_alert(subject, html_content)
+        
+        return f"ALERT: The memory threshold has been exceeded: {memory_usage_mb:.2f} MB / {MEMORY_THRESHOLD_MB} MB"
+    
+    return f"OK: Memory utilization is normal: {memory_usage_mb:.2f} MB / {MEMORY_THRESHOLD_MB} MB"
+
+def report_single_process_memory_status(**context):
+    """
+    Displays the memory status of a single process in the Airflow interface.
+    """
+    task_instance = context['task_instance']
+    memory_usage = task_instance.xcom_pull(task_ids='check_single_airflow_process_memory_usage', key='memory_usage_mb')
+    process_pid = task_instance.xcom_pull(task_ids='check_single_airflow_process_memory_usage', key='process_pid')
+    threshold = task_instance.xcom_pull(task_ids='check_single_airflow_process_memory_usage', key='threshold_mb')
+    timestamp = task_instance.xcom_pull(task_ids='check_single_airflow_process_memory_usage', key='timestamp')
+    
+    status = "OK" if memory_usage <= threshold else "ALERT"
+    percentage = (memory_usage / threshold) * 100
+    
+    report = f"""
+    ===== AIRFLOW SINGLE PROCESS MEMORY REPORT =====
+    Status: {status}
+    Process Memory: {memory_usage} MB
+    Memory Threshold: {threshold} MB
+    Usage Percentage: {percentage:.1f}%
+    Process PID: {process_pid}
+    Timestamp: {timestamp}
+    SMTP Server: {SMTP_SERVER}:{SMTP_PORT}
+    Alert Email: {EMAIL_RECIPIENT}
+    ===============================================
+    """
+    
+    print(report)
+    return report
+
+# Define DAG
+dag = DAG(
+    'single_process_memory_monitoring',
+    default_args=default_args,
+    description='Monitoring memory utilization by a single Airflow process',
+    schedule_interval=timedelta(minutes=int(MONITORING_INTERVAL)),
+    catchup=False
+)
+
+# Define the memory check task
+check_memory = PythonOperator(
+    task_id='check_single_airflow_process_memory_usage',
+    python_callable=check_single_airflow_process_memory_usage,
+    provide_context=True,
+    dag=dag
+)
+
+# Define the report generation task
+report_memory = PythonOperator(
+    task_id='report_single_process_memory_status',
+    python_callable=report_single_process_memory_status,
+    provide_context=True,
+    dag=dag
+)
+
+# Define the sequence of tasks
+check_memory >> report_memory

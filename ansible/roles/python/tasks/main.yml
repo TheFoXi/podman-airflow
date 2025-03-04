@@ -1,0 +1,12 @@
+---
+- name: Update packages and install dependencies
+  apt:
+    update_cache: yes  # Updates the package cache before installation
+    name:
+      - python3-pip
+      - python3-venv
+      - tzdata
+    state: present
+  become: yes
+  environment:
+    DEBIAN_FRONTEND: noninteractive  # Disables interactive prompts during package installation

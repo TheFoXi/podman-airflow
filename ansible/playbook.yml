@@ -1,0 +1,25 @@
+---
+# This playbook is designed to prepare and install Apache Airflow on specified hosts
+- name: Prepare and install Apache Airflow
+  hosts: airflow  # Specifies the target hosts group named 'airflow'
+  roles:
+    - python   # Includes the 'python' role to ensure Python dependencies are met
+    - airflow  # Includes the 'airflow' role to install and configure Apache Airflow
+  vars:
+    # Monitoring Python scripts env
+    memory_monitor_smtp_server: sandbox.smtp.mailtrap.io
+    memory_monitor_smtp_port: 2525
+    memory_monitor_smtp_user: user
+    memory_monitor_smtp_password: password
+    memory_monitor_email_from: user@gmaila.com
+    memory_monitor_threshold_mb: 1300 # Megabytes
+    memory_monitor_interval: 2 # Minutes
+    memory_monitor_email: user@gmaila.com
+    single_process_memory_threshold_mb: 100 # Megabytes
+    single_process_memory_interval: 2 # Minutes
+
+    # Airflow 
+    airflow_version: "2.10.5" # Airflow version
+    airflow_home: "/opt/airflow"
+    python_version: "{{ ansible_python.version.major }}.{{ ansible_python.version.minor }}"
+    constraint_url: "https://raw.githubusercontent.com/apache/airflow/constraints-{{ airflow_version }}/constraints-{{ python_version }}.txt"
