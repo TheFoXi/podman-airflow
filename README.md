@@ -1,10 +1,12 @@
 ## Standalone Airflow in Podman
 
-Automated installation script for Standalone Airflow with DAG modules that monitor memory consumption by processes. Designed for `Podman`, but can also run easily on `Docker` (e.g., `OrbStack`).
+Automated installation script for Standalone Airflow with DAG modules that monitor memory consumption by processes.  
+Designed for `Podman`, but can also run easily on `Docker` (e.g., `OrbStack`).
 
 ### 0. Project Configuration
 
-Before running the Terraform script, you need to configure Ansible variables. For this example, the mail provider `mailtrap.io` was used. Edit `./ansible/playbook.yml` accordingly:
+Before running the Terraform script, you need to configure Ansible variables.  
+For this example, the mail provider `mailtrap.io` was used. Edit `./ansible/playbook.yml` accordingly:
 
 ```yml
     memory_monitor_smtp_server: sandbox.smtp.mailtrap.io # Specify your SMTP server
